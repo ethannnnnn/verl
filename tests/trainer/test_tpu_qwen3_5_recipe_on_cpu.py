@@ -75,6 +75,10 @@ def test_defaults_are_unchanged(tmp_path):
     rollout = config.actor_rollout_ref.rollout
     assert rollout.seed == 1
     assert OmegaConf.to_container(rollout.engine_kwargs.vllm) == {"seed": 1, "no_enable_prefix_caching": True}
+    actor = config.actor_rollout_ref.actor
+    assert actor.use_dynamic_bsz is False
+    assert actor.ppo_max_token_len_per_gpu == 8192
+    assert not any(key.startswith("fixed_shape_") for key in actor.torchtitan.engine_kwargs.tpu)
 
 
 def test_null_engine_seed_keeps_per_replica_seeds(tmp_path):
@@ -95,3 +99,37 @@ def test_max_logprobs(tmp_path):
     OmegaConf.resolve(config)  # as verl.trainer.main_ppo does before building the workers
     rollout_config = omega_conf_to_dataclass(config.actor_rollout_ref.rollout, RolloutConfig)
     assert rollout_config.engine_kwargs["vllm"]["max_logprobs"] == 0
+
+
+def test_fixed_shape_rows(tmp_path):
+    config = compose_example(tmp_path, FIXED_SHAPE_ROWS="8192:16384:14336", MAX_RESPONSE_LEN="4096")
+    actor = config.actor_rollout_ref.actor
+    tpu = actor.torchtitan.engine_kwargs.tpu
+    assert tpu.fixed_shape_rows == "8192:16384:14336"
+    assert tpu.fixed_shape_max_seqs == 64
+    assert tpu.fixed_shape_response_len == 4096
+    assert tpu.fixed_shape_prewarm is True
+    # The fixed layout replaces the dynamic-batch partition, with the largest row as the token budget.
+    assert actor.use_dynamic_bsz is True
+    assert actor.ppo_max_token_len_per_gpu == 16384
+    # The reference model keeps its static micro-batches. The rollout log-prob setting follows the actor, as the
+    # engine workers require.
+    ref = config.actor_rollout_ref.ref
+    assert ref.log_prob_use_dynamic_bsz is False
+    assert not any(key.startswith("fixed_shape_") for key in ref.torchtitan.engine_kwargs.tpu)
+    assert config.actor_rollout_ref.rollout.log_prob_use_dynamic_bsz is True
+
+
+def test_fixed_shape_max_seqs(tmp_path):
+    config = compose_example(tmp_path, FIXED_SHAPE_ROWS="4096:8192", FIXED_SHAPE_MAX_SEQS="32")
+    assert config.actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.fixed_shape_max_seqs == 32
+    assert config.actor_rollout_ref.actor.ppo_max_token_len_per_gpu == 8192
+
+
+@pytest.mark.parametrize("rows", ["2048", "2048:2048", "8192:x", "8192::16384", "-8192", "08192"])
+def test_invalid_fixed_shape_rows_fail_before_launch(tmp_path, rows):
+    # The default MAX_PROMPT_LEN + MAX_RESPONSE_LEN is 2560 tokens, so a largest row of 2048 cannot hold a sequence.
+    result = run_example(tmp_path, FIXED_SHAPE_ROWS=rows)
+    assert result.returncode != 0
+    assert "FIXED_SHAPE_ROWS" in result.stderr
+    assert not (tmp_path / "args.json").exists()

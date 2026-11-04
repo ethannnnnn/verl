@@ -111,10 +111,46 @@ ROLLOUT_ENGINE_SEED="${ROLLOUT_ENGINE_SEED:-${SEED}}"
 # ROLLOUT_MAX_LOGPROBS=0 skips that top-k, which cut generation time by about 11% in RL fine-tuning of Qwen3.5-0.8B on
 # TPU v7x. verl raises max_logprobs to actor_rollout_ref.rollout.topk_log_probs when that is set.
 ROLLOUT_MAX_LOGPROBS="${ROLLOUT_MAX_LOGPROBS:-}"
+# FIXED_SHAPE_ROWS: fixed-shape trainer micro-batches, off by default. Requires a verl-hardware-plugin whose TorchTitan
+# engine has the fixed-shape micro-batch options (engine_kwargs.tpu.fixed_shape_*); plugins without them reject the
+# options. Every rank packs its sequences into the same list of packed rows, with lengths from this colon-separated set
+# (e.g. 8192:14336:16384; the largest must hold MAX_PROMPT_LEN + MAX_RESPONSE_LEN tokens) and at most
+# FIXED_SHAPE_MAX_SEQS sequences per row, so the trainer compiles each row length once instead of recompiling for every
+# new micro-batch shape. This turns on actor.use_dynamic_bsz, whose partition the fixed layout replaces, with the
+# largest row as the token budget; the reference model keeps its static micro-batches.
+FIXED_SHAPE_ROWS="${FIXED_SHAPE_ROWS:-}"
+FIXED_SHAPE_MAX_SEQS="${FIXED_SHAPE_MAX_SEQS:-64}"
 
+ppo_max_token_len=8192
 optional_args=()
 if [[ -n "${ROLLOUT_MAX_LOGPROBS}" ]]; then
     optional_args+=("++actor_rollout_ref.rollout.engine_kwargs.vllm.max_logprobs=${ROLLOUT_MAX_LOGPROBS}")
+fi
+if [[ -n "${FIXED_SHAPE_ROWS}" ]]; then
+    IFS=: read -r -a fixed_shape_rows <<< "${FIXED_SHAPE_ROWS}"
+    ppo_max_token_len=0
+    for row in "${fixed_shape_rows[@]}"; do
+        if [[ ! "${row}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: FIXED_SHAPE_ROWS=${FIXED_SHAPE_ROWS} must be colon-separated positive integers." >&2
+            exit 1
+        fi
+        if (( row > ppo_max_token_len )); then
+            ppo_max_token_len=${row}
+        fi
+    done
+    max_seq_len=$((MAX_PROMPT_LEN + MAX_RESPONSE_LEN))
+    if (( ppo_max_token_len < max_seq_len )); then
+        echo "ERROR: FIXED_SHAPE_ROWS=${FIXED_SHAPE_ROWS} needs a row of at least MAX_PROMPT_LEN + MAX_RESPONSE_LEN = ${max_seq_len} tokens." >&2
+        exit 1
+    fi
+    optional_args+=(
+        actor_rollout_ref.actor.use_dynamic_bsz=True
+        actor_rollout_ref.ref.log_prob_use_dynamic_bsz=False
+        "+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.fixed_shape_rows=${FIXED_SHAPE_ROWS}"
+        "+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.fixed_shape_max_seqs=${FIXED_SHAPE_MAX_SEQS}"
+        "+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.fixed_shape_response_len=${MAX_RESPONSE_LEN}"
+        +actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.fixed_shape_prewarm=True
+    )
 fi
 
 python3 -m verl.trainer.main_ppo \
@@ -164,7 +200,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.decay_type=cosine \
     actor_rollout_ref.actor.ppo_mini_batch_size="${PPO_MINI_BATCH_SIZE}" \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${MICRO_BATCH_SIZE}" \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${ppo_max_token_len}" \
     actor_rollout_ref.actor.data_loader_seed="${SEED}" \
     actor_rollout_ref.actor.policy_loss.loss_mode=bypass_mode \
     '+actor_rollout_ref.actor.policy_loss.rollout_correction=${algorithm.rollout_correction}' \

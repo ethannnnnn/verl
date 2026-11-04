@@ -163,8 +163,9 @@ The script has optional settings, all off by default:
 
 - `ROLLOUT_ENGINE_SEED=null` seeds the vLLM engine of rollout replica `r` with `SEED + r`. By default the script passes `SEED` as an explicit vLLM seed, which replaces verl's per-replica seed: with more than one rollout replica (`ROLLOUT_TENSOR_PARALLEL_SIZE` below the number of rollout chips), every engine then draws the same sampling noise while the batch shapes agree, so samples of one prompt on different replicas are correlated. With a single rollout replica, both settings give the same seed.
 - `ROLLOUT_MAX_LOGPROBS=0` sets vLLM's `max_logprobs` to 0 (vLLM's default is 20). verl reads only the log-prob of the sampled token, but vllm-torchtpu computes the top `max_logprobs` log-probs over the whole 248K-token vocabulary at every decode step. Skipping that cut generation time by about 11% in RL fine-tuning of Qwen3.5-0.8B on TPU v7x.
+- `FIXED_SHAPE_ROWS=<rows>` (e.g. `8192:14336:16384`) turns on fixed-shape trainer micro-batches: every rank packs its sequences into packed rows whose lengths come from this colon-separated set (the largest must hold `MAX_PROMPT_LEN + MAX_RESPONSE_LEN` tokens), with at most `FIXED_SHAPE_MAX_SEQS` (default 64) sequences per row, so the trainer compiles each row length once instead of recompiling for every new micro-batch shape. It needs a `verl-hardware-plugin` whose TorchTitan engine has the fixed-shape micro-batch options (`engine_kwargs.tpu.fixed_shape_*`).
 
-For example, Qwen3.5-0.8B with both:
+For example, Qwen3.5-0.8B with the two rollout settings:
 
 ```bash
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
