@@ -108,8 +108,8 @@ ROLLOUT_ENGINE_SEED="${ROLLOUT_ENGINE_SEED:-${SEED}}"
 # ROLLOUT_MAX_LOGPROBS: vLLM's max_logprobs, unset by default (vLLM's default is 20). verl reads only the log-prob of
 # the sampled token (logprobs=0), but vllm-torchtpu computes the top max_logprobs log-probs over the whole vocabulary
 # (248K tokens for Qwen3.5) at every decode step, so that one compiled program serves every request.
-# ROLLOUT_MAX_LOGPROBS=0 skips that top-k, which cut generation time by about 11% in RL fine-tuning of Qwen3.5-0.8B on
-# TPU v7x. verl raises max_logprobs to actor_rollout_ref.rollout.topk_log_probs when that is set.
+# ROLLOUT_MAX_LOGPROBS=0 skips that top-k, which shortens every decode step, most of all for small models such as
+# Qwen3.5-0.8B. verl raises max_logprobs to actor_rollout_ref.rollout.topk_log_probs when that is set.
 ROLLOUT_MAX_LOGPROBS="${ROLLOUT_MAX_LOGPROBS:-}"
 # FIXED_SHAPE_ROWS: fixed-shape trainer micro-batches, off by default. Requires a verl-hardware-plugin whose TorchTitan
 # engine has the fixed-shape micro-batch options (engine_kwargs.tpu.fixed_shape_*); plugins without them reject the
