@@ -158,3 +158,16 @@ To scale further to **2 `v6e-8` slices (16 chips)**, create two multi-host node 
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
+
+The script has optional settings, all off by default:
+
+- `ROLLOUT_ENGINE_SEED=null` seeds the vLLM engine of rollout replica `r` with `SEED + r`. By default the script passes `SEED` as an explicit vLLM seed, which replaces verl's per-replica seed: with more than one rollout replica (`ROLLOUT_TENSOR_PARALLEL_SIZE` below the number of rollout chips), every engine then draws the same sampling noise while the batch shapes agree, so samples of one prompt on different replicas are correlated. With a single rollout replica, both settings give the same seed.
+- `ROLLOUT_MAX_LOGPROBS=0` sets vLLM's `max_logprobs` to 0 (vLLM's default is 20). verl reads only the log-prob of the sampled token, but vllm-torchtpu computes the top `max_logprobs` log-probs over the whole 248K-token vocabulary at every decode step. Skipping that cut generation time by about 11% in RL fine-tuning of Qwen3.5-0.8B on TPU v7x.
+
+For example, Qwen3.5-0.8B with both:
+
+```bash
+ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
+  env MODEL_NAME=Qwen3.5-0.8B ROLLOUT_ENGINE_SEED=null ROLLOUT_MAX_LOGPROBS=0 \
+  bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
+```

@@ -96,6 +96,27 @@ NUM_WARMUP_BATCHES="${NUM_WARMUP_BATCHES:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 PAD_TO_LENGTH_BUCKET="${PAD_TO_LENGTH_BUCKET:-512}"
 
+# Optional settings, all off by default (see README.md, "Qwen3.5 on TPU v7x").
+#
+# ROLLOUT_ENGINE_SEED: vLLM engine seed, SEED by default. verl seeds the engine of rollout replica r with
+# actor_rollout_ref.rollout.seed + r, but an explicit engine_kwargs.vllm.seed replaces that per-replica seed. With more
+# than one rollout replica (ROLLOUT_TENSOR_PARALLEL_SIZE below the number of rollout chips), every engine then starts
+# from the same random state and draws the same sampling noise while the batch shapes agree, so samples of one prompt
+# on different replicas are correlated. ROLLOUT_ENGINE_SEED=null keeps the per-replica seeds. With a single rollout
+# replica, both give the engine seed SEED.
+ROLLOUT_ENGINE_SEED="${ROLLOUT_ENGINE_SEED:-${SEED}}"
+# ROLLOUT_MAX_LOGPROBS: vLLM's max_logprobs, unset by default (vLLM's default is 20). verl reads only the log-prob of
+# the sampled token (logprobs=0), but vllm-torchtpu computes the top max_logprobs log-probs over the whole vocabulary
+# (248K tokens for Qwen3.5) at every decode step, so that one compiled program serves every request.
+# ROLLOUT_MAX_LOGPROBS=0 skips that top-k, which cut generation time by about 11% in RL fine-tuning of Qwen3.5-0.8B on
+# TPU v7x. verl raises max_logprobs to actor_rollout_ref.rollout.topk_log_probs when that is set.
+ROLLOUT_MAX_LOGPROBS="${ROLLOUT_MAX_LOGPROBS:-}"
+
+optional_args=()
+if [[ -n "${ROLLOUT_MAX_LOGPROBS}" ]]; then
+    optional_args+=("++actor_rollout_ref.rollout.engine_kwargs.vllm.max_logprobs=${ROLLOUT_MAX_LOGPROBS}")
+fi
+
 python3 -m verl.trainer.main_ppo \
     trainer.use_v1=True \
     trainer.v1.trainer_mode=separate_async \
@@ -188,7 +209,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.layered_summon=True \
     actor_rollout_ref.rollout.seed="${SEED}" \
-    ++actor_rollout_ref.rollout.engine_kwargs.vllm.seed="${SEED}" \
+    ++actor_rollout_ref.rollout.engine_kwargs.vllm.seed="${ROLLOUT_ENGINE_SEED}" \
     actor_rollout_ref.rollout.enable_prefix_caching=False \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.no_enable_prefix_caching=True \
     actor_rollout_ref.rollout.calculate_log_probs=True \
@@ -224,4 +245,5 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.nnodes="${NNODES_ROLLOUT}" \
     actor_rollout_ref.rollout.n_gpus_per_node="${N_CHIPS_ROLLOUT}" \
     +rollout.nnodes="${NNODES_ROLLOUT}" \
-    +rollout.n_gpus_per_node="${N_CHIPS_ROLLOUT}" "$@"
+    +rollout.n_gpus_per_node="${N_CHIPS_ROLLOUT}" \
+    ${optional_args[@]+"${optional_args[@]}"} "$@"
