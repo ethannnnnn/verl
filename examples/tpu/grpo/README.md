@@ -9,6 +9,7 @@ By default, this guide walks through the minimal **2-chip setup** (2 TPU `v6e-1`
 | [`run_qwen3_0_6b_torchtitan.sh`](run_qwen3_0_6b_torchtitan.sh) | 5-step smoke test (Qwen3-0.6B, 2 `v6e-1` slices / 2 chips by default) |
 | [`run_qwen3_4b_torchtitan.sh`](run_qwen3_4b_torchtitan.sh) | 100-step GRPO run (Qwen3-4B, 2 `v6e-4` slices / 8 chips) |
 | [`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) | Qwen3.5 GRPO on TPU v7x (default `Qwen3.5-35B-A3B` MoE; also `Qwen3.5-0.8B`) |
+| [`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) | Software stack of the Qwen3.5 TPU v7x script: repository commits, Python packages, base image, Dockerfile delta |
 | [`ray-tpu-v6e-2slice.yaml`](ray-tpu-v6e-2slice.yaml) | KubeRay `RayCluster`: 1 CPU head pod and 2 TPU `v6e-1` slices (configurable for `v6e-4` / `v6e-8`) |
 | [`Dockerfile`](Dockerfile) | Image of the Ray pods |
 
@@ -157,4 +158,20 @@ To scale further to **2 `v6e-8` slices (16 chips)**, create two multi-host node 
 ```bash
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
+```
+
+[`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) lists the software stack the script is tested with: the commits of verl, `verl-hardware-plugin`, TorchTitan, vllm-torchtpu and torch_tpu, the Python package versions, the base image and the changes to [`Dockerfile`](Dockerfile).
+
+The script has optional settings, all off by default:
+
+- `ROLLOUT_ENGINE_SEED=null` seeds the vLLM engine of rollout replica `r` with `SEED + r`. By default the script passes `SEED` as an explicit vLLM seed, which replaces verl's per-replica seed: with more than one rollout replica (`ROLLOUT_TENSOR_PARALLEL_SIZE` below the number of rollout chips), every engine then draws the same sampling noise while the batch shapes agree, so samples of one prompt on different replicas are correlated. With a single rollout replica, both settings give the same seed.
+- `ROLLOUT_MAX_LOGPROBS=0` sets vLLM's `max_logprobs` to 0 (vLLM's default is 20). verl reads only the log-prob of the sampled token, but vllm-torchtpu computes the top `max_logprobs` log-probs over the whole 248K-token vocabulary at every decode step. Skipping that shortens every decode step, so generation is faster, most of all for small models such as Qwen3.5-0.8B.
+- `FIXED_SHAPE_ROWS=<rows>` (e.g. `8192:14336:16384`) turns on fixed-shape trainer micro-batches: every rank packs its sequences into packed rows whose lengths come from this colon-separated set (the largest must hold `MAX_PROMPT_LEN + MAX_RESPONSE_LEN` tokens), with at most `FIXED_SHAPE_MAX_SEQS` (default 64) sequences per row, so the trainer compiles each row length once instead of recompiling for every new micro-batch shape. It needs a `verl-hardware-plugin` whose TorchTitan engine has the fixed-shape micro-batch options (`engine_kwargs.tpu.fixed_shape_*`).
+
+For example, Qwen3.5-0.8B with the two rollout settings:
+
+```bash
+ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
+  env MODEL_NAME=Qwen3.5-0.8B ROLLOUT_ENGINE_SEED=null ROLLOUT_MAX_LOGPROBS=0 \
+  bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
