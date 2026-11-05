@@ -21,9 +21,11 @@ repositories at the listed commits.
 
 ## Dense Qwen3.5 models
 
-On this stack, run a dense Qwen3.5 model (e.g. `Qwen3.5-0.8B`) with the extra argument
-`+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.model_kernels=none`. The script passes its arguments on to
-`verl.trainer.main_ppo`; see [README.md](README.md) for an example.
+On this stack, run a dense Qwen3.5 model (e.g. `Qwen3.5-0.8B`) with `model_kernels=none` on every TorchTitan engine:
+`+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.model_kernels=none`,
+`+actor_rollout_ref.ref.torchtitan.engine_kwargs.tpu.model_kernels=none` (the reference model used by the KL loss reads its
+own `engine_kwargs`, which do not inherit the actor's) and `+critic.torchtitan.engine_kwargs.tpu.model_kernels=none`. The
+script passes its arguments on to `verl.trainer.main_ppo`; see [README.md](README.md) for an example.
 
 verl-hardware-plugin `56d2cd37` defaults to `model_kernels=auto`. That turns on the Qwen3.5 kernels `moe` and `lce`
 whenever `torchtitan/experiments/tpu/qwen3_5/config_registry.py` has `_use_tpu_moe_kernels`, which torchtitan
