@@ -19,6 +19,25 @@ repositories at the listed commits.
 `rayproject/ray:2.56.0-py312` (Python 3.12, Ray 2.56.0), image index digest
 `sha256:2951c07de396a8b746f9c678b52c6e2282e614e00f80e6846a9ccd12945ae6b0`.
 
+## Dense Qwen3.5 models
+
+On this stack, run a dense Qwen3.5 model (e.g. `Qwen3.5-0.8B`) with the extra argument
+`+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.model_kernels=none`. The script passes its arguments on to
+`verl.trainer.main_ppo`; see [README.md](README.md) for an example.
+
+verl-hardware-plugin `56d2cd37` defaults to `model_kernels=auto`. That turns on the Qwen3.5 kernels `moe` and `lce`
+whenever `torchtitan/experiments/tpu/qwen3_5/config_registry.py` has `_use_tpu_moe_kernels`, which torchtitan
+`8ad0bfcd` does. The plugin does not check whether the model is a MoE. A dense model has no `TpuGroupedExperts` and no
+TPU token dispatcher, so the TorchTitan engine fails at initialization with:
+
+```
+ValueError: The TPU MoE kernels need TpuGroupedExperts and a TPU token dispatcher (_TPU_MOE_CONVERTERS)
+```
+
+`model_kernels=none` turns the optional kernels off. Qwen3.5-0.8B loses nothing by it. `lce` only sets tuned fused
+cross-entropy tiles (1024, 2048, 640), and those apply only when the hidden size is a multiple of 2048 and the
+vocabulary a multiple of 640. Qwen3.5-0.8B has a hidden size of 1024, so it keeps the kernel's default tiles either way.
+
 ## Python packages
 
 | Package | Version | Source |
