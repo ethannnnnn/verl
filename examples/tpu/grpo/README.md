@@ -9,6 +9,7 @@ By default, this guide walks through the minimal **2-chip setup** (2 TPU `v6e-1`
 | [`run_qwen3_0_6b_torchtitan.sh`](run_qwen3_0_6b_torchtitan.sh) | 5-step smoke test (Qwen3-0.6B, 2 `v6e-1` slices / 2 chips by default) |
 | [`run_qwen3_4b_torchtitan.sh`](run_qwen3_4b_torchtitan.sh) | 100-step GRPO run (Qwen3-4B, 2 `v6e-4` slices / 8 chips) |
 | [`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) | Qwen3.5 GRPO on TPU v7x (default `Qwen3.5-35B-A3B` MoE; also `Qwen3.5-0.8B`) |
+| [`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) | Software stack of the Qwen3.5 TPU v7x script: repository commits, Python packages, base image, Dockerfile delta |
 | [`ray-tpu-v6e-2slice.yaml`](ray-tpu-v6e-2slice.yaml) | KubeRay `RayCluster`: 1 CPU head pod and 2 TPU `v6e-1` slices (configurable for `v6e-4` / `v6e-8`) |
 | [`Dockerfile`](Dockerfile) | Image of the Ray pods |
 
@@ -158,6 +159,8 @@ To scale further to **2 `v6e-8` slices (16 chips)**, create two multi-host node 
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
+
+[`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) lists the software stack the script is tested with: the commits of verl, `verl-hardware-plugin`, TorchTitan, vllm-torchtpu and torch_tpu, the Python package versions, the base image and the changes to [`Dockerfile`](Dockerfile).
 
 The script has optional settings, all off by default:
 
