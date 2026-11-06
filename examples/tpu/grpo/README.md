@@ -153,14 +153,14 @@ To scale further to **2 `v6e-8` slices (16 chips)**, create two multi-host node 
 
 ## 7. Qwen3.5 on TPU v7x
 
-[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) runs GRPO on GSM8K with Qwen3.5 (default `Qwen3.5-35B-A3B` MoE) on TPU v7x, with one trainer slice and one rollout slice (e.g. `2x2x1` each). `MODEL_PATH` must be a text-only Qwen3.5 checkpoint (`Qwen3_5[Moe]ForCausalLM`, i.e. the language model of the Hugging Face checkpoint without the vision encoder). Submit it as in step 5:
+[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) runs GRPO on GSM8K with Qwen3.5 (default `Qwen3.5-35B-A3B` MoE) on TPU v7x, with one trainer slice and one rollout slice (e.g. `2x2x1` each). `MODEL_PATH` must be a text-only Qwen3.5 checkpoint (`Qwen3_5[Moe]ForCausalLM`, i.e. the language model of the Hugging Face checkpoint without the vision encoder; see [`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md#text-only-checkpoint) for the conversion of `Qwen3.5-0.8B`). Submit it as in step 5:
 
 ```bash
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
 
-[`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) lists the software stack the script is tested with: the commits of verl, `verl-hardware-plugin`, TorchTitan, vllm-torchtpu and torch_tpu (tag `stack/qwen35/20261104` of their forks), the Python package versions, the base image and the changes to [`Dockerfile`](Dockerfile), which include the TorchTitan fork commit.
+[`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) lists the software stack the script is tested with: the commits of verl, `verl-hardware-plugin`, TorchTitan, vllm-torchtpu and torch_tpu (tag `stack/qwen35/20261104` of their forks), the Python package versions, the base image and the changes to [`Dockerfile`](Dockerfile), which include the TorchTitan fork commit. It also gives the tested Ray cluster layouts (4 + 4 and 16 + 16 chips), the text-only checkpoint and the GSM8K revision.
 
 The script has optional settings, all off by default:
 

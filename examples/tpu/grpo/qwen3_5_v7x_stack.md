@@ -41,6 +41,50 @@ ValueError: The TPU MoE kernels need TpuGroupedExperts and a TPU token dispatche
 cross-entropy tiles (1024, 2048, 640), and those apply only when the hidden size is a multiple of 2048 and the
 vocabulary a multiple of 640. Qwen3.5-0.8B has a hidden size of 1024, so it keeps the kernel's default tiles either way.
 
+## Ray cluster layout
+
+Training and rollout run on separate TPU slices. A TPU v7x host has 4 chips and 8 TensorCores, so each TPU host joins
+the Ray cluster with `--resources='{"TPU": 8, "tpu-group-<n>": 1}'`, and `N_CHIPS_TRAINER` and `N_CHIPS_ROLLOUT` keep
+their default of 8. verl-hardware-plugin gives the trainer the lowest-numbered `tpu-group-<n>` and each rollout replica
+the next unclaimed one, or the last one once all are claimed. The stack is tested with these layouts:
+
+| Chips (trainer + rollout) | Trainer | Rollout | Script settings |
+|---|---|---|---|
+| 8 (4 + 4) | One `2x2x1` slice: 1 host, 8 ranks, `tpu-group-0` | One `2x2x1` slice: 1 host, one TP8 engine, `tpu-group-1` | The defaults |
+| 32 (16 + 16) | One `2x2x4` slice: 4 hosts, 32 ranks, `tpu-group-0` on all 4 hosts | Four `2x2x1` slices: one TP8 engine on each host, `tpu-group-1` on all 4 hosts | `NNODES_TRAINER=4 NNODES_ROLLOUT=4 ROLLOUT_TENSOR_PARALLEL_SIZE=8` |
+
+The four rollout slices are independent, so the 16 + 16 layout needs `ROLLOUT_TENSOR_PARALLEL_SIZE=8`: by default the
+script spans one engine over all 32 rollout TensorCores, which needs a single 4-host rollout slice. If the platform sets
+multi-slice variables (`MEGASCALE_*`) on the TPU hosts, unset them before `ray start`, so that the trainer and rollout
+slices keep separate TPU runtimes.
+
+## Text-only checkpoint
+
+The stack is tested with [`Qwen/Qwen3.5-0.8B`](https://huggingface.co/Qwen/Qwen3.5-0.8B) at revision
+`2fc06364715b967f1860aea9cf38778875588b17`, converted to a text-only checkpoint:
+
+- `config.json`: the source's `text_config`, with `architectures=["Qwen3_5ForCausalLM"]`, `model_type="qwen3_5_text"` and
+  `tie_word_embeddings=false`.
+- Weights: the `model.language_model.*` tensors, renamed to `model.*`, plus `lm_head.weight`, a copy of
+  `model.embed_tokens.weight`. The vision encoder (`model.visual.*`) and the multi-token prediction weights (`mtp.*`)
+  are dropped. TorchTitan's Qwen3.5 models train a separate `lm_head` rather than tying it to the embedding, so the
+  checkpoint carries it explicitly.
+- Files: the weights as safetensors whose file name contains a number, e.g. `model-00001-of-00001.safetensors`, and a
+  matching `model.safetensors.index.json` (TorchTitan's state-dict adapter reads the shard number from the file names in
+  the index), plus the source's `tokenizer.json`, `tokenizer_config.json`, `vocab.json`, `merges.txt`,
+  `chat_template.jinja` and `LICENSE`.
+
+## GSM8K data
+
+[`gsm8k.py`](../../data_preprocess/gsm8k.py) loads `openai/gsm8k` (config `main`) from the Hugging Face Hub at its latest
+revision. The stack is tested with revision `740312add88f781978c0658806c59bc2815b9866` (7,473 train and 1,319 test
+rows). To pin it, download that revision and pass it to the script:
+
+```bash
+hf download openai/gsm8k --repo-type dataset --revision 740312add88f781978c0658806c59bc2815b9866 --local-dir /tmp/gsm8k-raw
+PYTHONPATH=. python examples/data_preprocess/gsm8k.py --local_dataset_path /tmp/gsm8k-raw --local_save_dir /tmp/gsm8k
+```
+
 ## Python packages
 
 | Package | Version | Source |
