@@ -1,18 +1,19 @@
 # Software stack for `run_qwen3_5_torchtitan.sh` on TPU v7x
 
-[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) is tested on TPU v7x with the software stack below. Build the
-image from [`Dockerfile`](Dockerfile) with the [Dockerfile delta](#dockerfile-delta) applied, and check out the
-repositories at the listed commits.
+[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) is tested on TPU v7x with the software stack below. The forks of
+the five repositories tag it `stack/qwen35/20261104`. They belong to the GitHub account that hosts this verl fork,
+written `<OWNER>` below. Check out each fork at its tagged commit, and build the image from [`Dockerfile`](Dockerfile)
+with the [Dockerfile delta](#dockerfile-delta) applied.
 
 ## Repositories
 
-| Repository | Commit | Notes |
-|---|---|---|
-| [verl-project/verl](https://github.com/verl-project/verl) | `31cfccb4dbad8f1f4aa41a34eb589afbe283e8fe` | Base of this recipe |
-| [verl-project/verl-hardware-plugin](https://github.com/verl-project/verl-hardware-plugin) | `56d2cd370a6c957aa78e7da507e86c8b354b32e9` | Shipped with the job (`py_modules`), see [README.md](README.md) |
-| [google-pytorch/torchtitan](https://github.com/google-pytorch/torchtitan) | `8ad0bfcdebd927c2fedef8c1e2155bd859c280f5` | `/torchtitan` in the image (`TORCHTITAN_COMMIT`) |
-| [vllm-project/vllm-torchtpu](https://github.com/vllm-project/vllm-torchtpu) | `732c43464b5d4601d2529f2ee42af20c3be11c99` | `/vllm-torchtpu` in the image (`VLLM_TORCHTPU_COMMIT`) |
-| [google-pytorch/torch_tpu](https://github.com/google-pytorch/torch_tpu) | `005903d0ef0dde919b832530451e568912c6f464` | Tag `v0.2.0`; installed as the `torch-tpu==0.2.0` wheel |
+| Repository | Tagged commit | Upstream base | Notes |
+|---|---|---|---|
+| `<OWNER>/verl` | `918af6c2172153a1c6bfddf8ebba326c4ac77ecf` | [verl-project/verl](https://github.com/verl-project/verl) `31cfccb4dbad8f1f4aa41a34eb589afbe283e8fe` | This recipe |
+| `<OWNER>/verl-hardware-plugin` | `1b9056f5a8d0d10fd85538823ca03fac520acc89` | [verl-project/verl-hardware-plugin](https://github.com/verl-project/verl-hardware-plugin) `56d2cd370a6c957aa78e7da507e86c8b354b32e9` | Shipped with the job (`py_modules`), see [README.md](README.md) |
+| `<OWNER>/torchtitan` | `aaf742e4a3c990b7b72796142411e51ec44f8e90` | [google-pytorch/torchtitan](https://github.com/google-pytorch/torchtitan) `8ad0bfcdebd927c2fedef8c1e2155bd859c280f5` | `/torchtitan` in the image (`TORCHTITAN_REPO`, `TORCHTITAN_COMMIT`), see the [Dockerfile delta](#dockerfile-delta) |
+| `<OWNER>/vllm-torchtpu` | `732c43464b5d4601d2529f2ee42af20c3be11c99` | [vllm-project/vllm-torchtpu](https://github.com/vllm-project/vllm-torchtpu), the same commit | `/vllm-torchtpu` in the image (`VLLM_TORCHTPU_COMMIT`) |
+| `<OWNER>/torch_tpu` | `005903d0ef0dde919b832530451e568912c6f464` | [google-pytorch/torch_tpu](https://github.com/google-pytorch/torch_tpu) tag `v0.2.0`, the same commit | Installed as the `torch-tpu==0.2.0` wheel |
 
 ## Base image
 
@@ -27,10 +28,10 @@ On this stack, run a dense Qwen3.5 model (e.g. `Qwen3.5-0.8B`) with `model_kerne
 own `engine_kwargs`, which do not inherit the actor's) and `+critic.torchtitan.engine_kwargs.tpu.model_kernels=none`. The
 script passes its arguments on to `verl.trainer.main_ppo`; see [README.md](README.md) for an example.
 
-verl-hardware-plugin `56d2cd37` defaults to `model_kernels=auto`. That turns on the Qwen3.5 kernels `moe` and `lce`
-whenever `torchtitan/experiments/tpu/qwen3_5/config_registry.py` has `_use_tpu_moe_kernels`, which torchtitan
-`8ad0bfcd` does. The plugin does not check whether the model is a MoE. A dense model has no `TpuGroupedExperts` and no
-TPU token dispatcher, so the TorchTitan engine fails at initialization with:
+verl-hardware-plugin `1b9056f5`, like its base `56d2cd37`, defaults to `model_kernels=auto`. That turns on the Qwen3.5
+kernels `moe` and `lce` whenever `torchtitan/experiments/tpu/qwen3_5/config_registry.py` has `_use_tpu_moe_kernels`,
+which torchtitan `aaf742e4` and its base `8ad0bfcd` do. The plugin does not check whether the model is a MoE. A dense
+model has no `TpuGroupedExperts` and no TPU token dispatcher, so the TorchTitan engine fails at initialization with:
 
 ```
 ValueError: The TPU MoE kernels need TpuGroupedExperts and a TPU token dispatcher (_TPU_MOE_CONVERTERS)
@@ -54,7 +55,7 @@ vocabulary a multiple of 640. Qwen3.5-0.8B has a hidden size of 1024, so it keep
 | `tpu-sync-torch` | 0.0.1.dev20261012084241 | PyPI |
 | `transformers` | 5.19.0 | PyPI |
 | `tensordict` | 0.15.1 | PyPI |
-| `TransferQueue` | 0.1.11 | PyPI, hash-pinned overlay (see below) |
+| `TransferQueue` | 0.1.11 | PyPI, in the [`Dockerfile`](Dockerfile) at the tag and in the hash-pinned overlay (see below) |
 | `ray` | 2.56.0 | Base image |
 | `vllm` | 0.32.0 | Source, tag `v0.32.0` (`5df63a7203cdb9328d824a27b682e77c7b9928be`), editable install |
 
@@ -70,29 +71,46 @@ The overlay, the last step of the [Dockerfile delta](#dockerfile-delta), install
 
 ## Dockerfile delta
 
-Relative to [`Dockerfile`](Dockerfile) at verl `31cfccb4`, which pins jax/jaxlib 0.11.2, tokamax 0.0.14,
-TransferQueue 0.1.8 and torchtitan `89ef29b5`. torchtitan `8ad0bfcd` pins jax/jaxlib 0.12.0.1 and tokamax 0.0.17 in
-`torchtitan/experiments/tpu/requirements.txt`, and verl's `pyproject.toml` requires `TransferQueue>=0.1.11` (V1 async
-checkpoints use its checkpoint API). The overlay changes only these four packages. vllm-torchtpu `732c4346` still
-declares `jax==0.11.2` and `jaxlib==0.11.2`, so `pip check` reports those two requirements.
+Relative to [`Dockerfile`](Dockerfile) at the tagged verl commit `918af6c2`, which fetches torchtitan `89ef29b5` from
+google-pytorch/torchtitan and pins jax/jaxlib 0.11.2 and tokamax 0.0.14.
+
+- torchtitan: the stack uses `aaf742e4` from `<OWNER>/torchtitan`, which is google-pytorch/torchtitan `8ad0bfcd` plus
+  one commit, `[TPU][Qwen3.5] chunked_gated_delta: take each chunk from one unbind`. google-pytorch/torchtitan does not
+  have that commit, so the image fetches the fork. Replace `<OWNER>` in `TORCHTITAN_REPO`.
+- Overlay: torchtitan `8ad0bfcd` pins jax/jaxlib 0.12.0.1 and tokamax 0.0.17 in
+  `torchtitan/experiments/tpu/requirements.txt`, and verl's `pyproject.toml` requires `TransferQueue>=0.1.11` (V1 async
+  checkpoints use its checkpoint API). The Dockerfile at the tag already installs TransferQueue 0.1.11, so the overlay
+  changes only jax, jaxlib and tokamax. vllm-torchtpu `732c4346` still declares `jax==0.11.2` and `jaxlib==0.11.2`, so
+  `pip check` reports those two requirements.
 
 ```diff
 diff --git a/examples/tpu/grpo/Dockerfile b/examples/tpu/grpo/Dockerfile
-index 71c1e24..07f2366 100644
+index f8de8fb..8b6cddf 100644
 --- a/examples/tpu/grpo/Dockerfile
 +++ b/examples/tpu/grpo/Dockerfile
-@@ -5,8 +5,8 @@ FROM rayproject/ray:2.56.0-py312
+@@ -5,8 +5,10 @@ FROM rayproject/ray:2.56.0-py312
 
  ARG TORCH_TPU_VERSION=0.2.0
  ARG TPU_SYNC_VERSION=0.0.1.dev20261012084241
 -# 10/25/2026 HEAD of torchtitan
 -ARG TORCHTITAN_COMMIT=89ef29b5a0d03a6883079ab37ff1bdc498fe3485
-+# 11/03/2026 HEAD of torchtitan
-+ARG TORCHTITAN_COMMIT=8ad0bfcdebd927c2fedef8c1e2155bd859c280f5
++# Tag stack/qwen35/20261104 of the torchtitan fork: 11/03/2026 HEAD of torchtitan (8ad0bfcd) plus one commit.
++# Replace <OWNER> with the GitHub account of the forks.
++ARG TORCHTITAN_REPO=https://github.com/<OWNER>/torchtitan.git
++ARG TORCHTITAN_COMMIT=aaf742e4a3c990b7b72796142411e51ec44f8e90
  # Optimized Qwen3.5 (google-pytorch/torchtitan#80, last of the TPU Qwen3.5 perf series #73-#80):
  # ARG TORCHTITAN_COMMIT=3ebfb20abc89613b29b38634b464fbca0a24c96b
 
-@@ -65,6 +65,17 @@ pip install --no-deps "torch==${torch}+cpu" "torchvision==${torchvision}+cpu" --
+@@ -18,7 +20,7 @@ RUN apt-get update && apt-get install -y gcc-12 g++-12 build-essential cmake nin
+     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12 \
+     && rm -rf /var/lib/apt/lists/*
+
+-ADD https://github.com/google-pytorch/torchtitan.git#${TORCHTITAN_COMMIT} /torchtitan
++ADD ${TORCHTITAN_REPO}#${TORCHTITAN_COMMIT} /torchtitan
+ ADD https://github.com/vllm-project/vllm-torchtpu.git#${VLLM_TORCHTPU_COMMIT} /vllm-torchtpu
+ ADD https://github.com/vllm-project/vllm.git#v0.32.0 /vllm
+ # vllm-torchtpu is the TPU backend, so vLLM must not install tpu-inference.
+@@ -66,6 +68,17 @@ pip install --no-deps "torch==${torch}+cpu" "torchvision==${torchvision}+cpu" --
  pip install --pre --no-deps "torch-tpu==${TORCH_TPU_VERSION}" "tpu-sync-torch==${TPU_SYNC_VERSION}"
  pip install --no-deps "jax==${jax}" "jaxlib==${jax}" "libtpu==${libtpu}" numba==0.65.0 "${transformers}" "fastapi<0.137" \
      -f "${libtpu_links}"
