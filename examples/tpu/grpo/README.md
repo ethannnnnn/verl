@@ -10,6 +10,7 @@ By default, this guide walks through the minimal **2-chip setup** (2 TPU `v6e-1`
 | [`run_qwen3_4b_torchtitan.sh`](run_qwen3_4b_torchtitan.sh) | 100-step GRPO run (Qwen3-4B, 2 `v6e-4` slices / 8 chips) |
 | [`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) | Qwen3.5 GRPO on TPU v7x (default `Qwen3.5-35B-A3B` MoE; also `Qwen3.5-0.8B`) |
 | [`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md) | Software stack of the Qwen3.5 TPU v7x script (repository commits, Python packages, base image, Dockerfile delta), the open pull requests that make it faster, and our measured results |
+| [`qwen3_5_v7x_colocated.md`](qwen3_5_v7x_colocated.md) | The Qwen3.5 v7x script of verl main with the rollout inside the trainer processes, on one TPU v7x host: the code, the settings, the command of our 10-update TPU run and its results (open `verl-hardware-plugin` pull requests #143-#146 and #157) |
 | [`ray-tpu-v6e-2slice.yaml`](ray-tpu-v6e-2slice.yaml) | KubeRay `RayCluster`: 1 CPU head pod and 2 TPU `v6e-1` slices (configurable for `v6e-4` / `v6e-8`) |
 | [`Dockerfile`](Dockerfile) | Image of the Ray pods |
 
@@ -180,3 +181,5 @@ ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   +actor_rollout_ref.ref.torchtitan.engine_kwargs.tpu.model_kernels=none \
   +critic.torchtitan.engine_kwargs.tpu.model_kernels=none
 ```
+
+To run Qwen3.5-0.8B on one TPU v7x host with the vLLM rollout inside the trainer processes instead of on its own slice, see [`qwen3_5_v7x_colocated.md`](qwen3_5_v7x_colocated.md). It is for verl main's version of the script, needs open `verl-hardware-plugin` pull requests, and has passed one 10-update run on TPU v7x; it does not apply to the stack in [`qwen3_5_v7x_stack.md`](qwen3_5_v7x_stack.md).
