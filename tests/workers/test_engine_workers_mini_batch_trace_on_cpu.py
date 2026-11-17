@@ -19,15 +19,21 @@ mini-batch: a mini-batch is the unit a ``torch.profiler.schedule`` sub-samples t
 (see ``TorchProfilerScheduleConfig``). The forward-only stages (log-prob / ref / values) run their
 batches without advancing the profiler, so a schedule never sub-samples them.
 
+The losses of the micro-batches are summed on the host, so the data-parallel loss average that
+follows is one scalar on the device, whatever the number of micro-batches.
+
 These tests drive the worker methods with mocked engines, so no GPU or ray is needed.
 """
 
+import math
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 from tensordict import TensorDict
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from verl.utils import tensordict_utils as tu
 from verl.workers.engine_workers import TrainingWorker
@@ -103,3 +109,58 @@ def test_forward_only_stage_is_not_a_profiler_step():
 
     assert TrainingWorker.infer_batch(worker, data) is None
     worker.profiler.step.assert_not_called()
+
+
+def _postprocess(monkeypatch, losses):
+    """Run TrainingWorker._postprocess_output on ``losses`` with a data-parallel group (all-reduce recorded)."""
+    import verl.workers.engine_workers as engine_workers
+
+    reduced = []
+    monkeypatch.setattr(torch.distributed, "all_reduce", lambda tensor, **kwargs: reduced.append(tensor.clone()))
+    monkeypatch.setattr(engine_workers, "allgather_dict_into_dict", lambda data, group: data)
+    memory = SimpleNamespace(max_memory_allocated=lambda: 0, max_memory_reserved=lambda: 0)
+    monkeypatch.setattr(engine_workers, "get_torch_device", lambda: memory)
+    worker = _worker(_engine(get_data_parallel_group=lambda: object()))
+    worker.device_name = "cpu"
+    worker.flops_counter = None
+    output = {"loss": losses, "metrics": {}, "model_output": {}}
+    result = TrainingWorker._postprocess_output(
+        worker, output, global_token_num=None, delta_time=1.0, forward_only=False, images_seqlens=None
+    )
+    return tu.get(result, "metrics")["loss"], reduced
+
+
+class _TensorShapes(TorchDispatchMode):
+    """Collects the shape of every tensor that an op reads or writes."""
+
+    def __init__(self):
+        super().__init__()
+        self.shapes = set()
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        out = func(*args, **(kwargs or {}))
+        flat = torch.utils._pytree.tree_flatten((args, kwargs, out))[0]
+        self.shapes.update(tuple(t.shape) for t in flat if isinstance(t, torch.Tensor))
+        return out
+
+
+@pytest.mark.parametrize("num_micro_batches", [1, 3, 7])
+def test_micro_batch_losses_are_summed_on_the_host(monkeypatch, num_micro_batches):
+    losses = [0.1 * (i + 1) for i in range(num_micro_batches)]
+    with _TensorShapes() as ops:
+        loss, reduced = _postprocess(monkeypatch, losses)
+    # Only scalars reach the device, so no device program depends on the number of micro-batches.
+    assert ops.shapes == {()}
+    assert [tensor.shape for tensor in reduced] == [torch.Size([])]
+    assert loss == pytest.approx(math.fsum(losses), rel=1e-6)
+
+
+def test_micro_batch_loss_sum_is_exact(monkeypatch):
+    assert _postprocess(monkeypatch, [1e8, 1.0, -1e8])[0] == 1.0
+
+
+def test_micro_batch_losses_as_scalars_tensors_or_lists(monkeypatch):
+    assert _postprocess(monkeypatch, 2.5)[0] == 2.5
+    assert _postprocess(monkeypatch, [])[0] == 0.0
+    assert _postprocess(monkeypatch, [torch.tensor(0.25), torch.tensor(0.5)])[0] == 0.75
+    assert _postprocess(monkeypatch, [[0.25], [0.5]])[0] == 0.75  # engines that report a one-element list

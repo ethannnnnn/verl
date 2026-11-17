@@ -14,6 +14,7 @@
 import asyncio
 import functools
 import logging
+import math
 import os
 from contextlib import nullcontext
 from copy import deepcopy
@@ -92,6 +93,20 @@ def _plan_liger_flsce_capacity(config: DictConfig, role: str) -> Optional[tuple[
     if not tokens:
         raise ValueError("Liger requires existing max-token limits for its colocated Megatron consumers")
     return max(tokens), min(tp_sizes)
+
+
+def _sum_micro_batch_losses(losses) -> float:
+    """Sum the per-micro-batch losses of one engine call on the host, exactly (``math.fsum``).
+
+    Engines report the loss of each micro-batch as a Python float (some as a scalar tensor or a one-element list).
+    Summing them here keeps the device-side data-parallel average a single scalar, whatever the number of
+    micro-batches.
+    """
+    if isinstance(losses, torch.Tensor):
+        return math.fsum(losses.detach().double().flatten().tolist())
+    if isinstance(losses, list | tuple):
+        return math.fsum(_sum_micro_batch_losses(loss) for loss in losses)
+    return float(losses)
 
 
 def _with_routing_replay_flag(enabled: bool):
@@ -227,8 +242,9 @@ class TrainingWorker(Worker, DistProfilerExtension):
         metrics: dict = output.pop("metrics")
         # perform all gather in dp group to ensure that it's correct.
         # Here each metric in metrics can be a list (micro-batch metrics) or a singleton
-        # we should always sum the loss of each micro-batch as we scale by global_bsz/global_token
-        loss = torch.sum(torch.tensor(output.pop("loss"), device=self.device_name))
+        # we should always sum the loss of each micro-batch as we scale by global_bsz/global_token.
+        # Sum on the host, so the device sees one scalar whatever the number of micro-batches.
+        loss = torch.tensor(_sum_micro_batch_losses(output.pop("loss")), device=self.device_name)
         dp_group = self.engine.get_data_parallel_group()
         if dp_group is not None:
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
