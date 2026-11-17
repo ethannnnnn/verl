@@ -16,6 +16,7 @@
 
 import torch
 from tensordict import TensorDict
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from verl.utils import tensordict_utils as tu
 from verl.utils.metric import AggregationType, Metric
@@ -26,8 +27,12 @@ from verl.workers.utils.padding import left_right_2_no_padding
 PROMPT_LENGTH = 2
 
 
-def _metrics(old_log_probs, log_probs, dp_size=1, batch_num_tokens=None, global_batch_size=None):
+def _loss_inputs(
+    old_log_probs, log_probs, dp_size=1, batch_num_tokens=None, global_batch_size=None, response_mask=None
+):
     response_length = old_log_probs.numel()
+    if response_mask is None:
+        response_mask = torch.ones(response_length, dtype=torch.long)
     sequence_length = PROMPT_LENGTH + response_length
     data = TensorDict(
         {
@@ -36,7 +41,7 @@ def _metrics(old_log_probs, log_probs, dp_size=1, batch_num_tokens=None, global_
             "input_ids": torch.zeros(1, sequence_length, dtype=torch.long),
             "attention_mask": torch.ones(1, sequence_length, dtype=torch.long),
             "position_ids": torch.arange(sequence_length).unsqueeze(0),
-            "response_mask": torch.ones(1, response_length, dtype=torch.long),
+            "response_mask": response_mask.unsqueeze(0),
             "old_log_probs": old_log_probs.unsqueeze(0),
             "advantages": torch.zeros(1, response_length),
         },
@@ -48,6 +53,11 @@ def _metrics(old_log_probs, log_probs, dp_size=1, batch_num_tokens=None, global_
     row[PROMPT_LENGTH - 1 : PROMPT_LENGTH - 1 + response_length] = log_probs
     model_output = {"log_probs": torch.nested.as_nested_tensor([row], layout=torch.jagged)}
     config = ActorConfig(strategy="fsdp", rollout_n=1, ppo_micro_batch_size_per_gpu=1, loss_agg_mode="token-mean")
+    return config, model_output, data
+
+
+def _metrics(*args, **kwargs):
+    config, model_output, data = _loss_inputs(*args, **kwargs)
     _, metrics = ppo_loss(config, model_output, data)
     return metrics
 
@@ -84,3 +94,37 @@ def test_dp_reduction_recovers_the_global_count():
     # This is the same rank reduction used by TrainingWorker.train_mini_batch.
     combined = Metric.aggregate_dp([rank["actor/old_logprobs_mismatch_count"] for rank in ranks])
     assert combined == 2
+
+
+def test_masked_tokens_are_not_counted():
+    old = torch.tensor([-1.0, -2.0, -3.0, -4.0])
+    new = torch.tensor([-1.5, -2.0, -3.5, -4.5])
+    metrics = _metrics(old, new, response_mask=torch.tensor([1, 1, 1, 0]))
+    assert metrics["actor/old_logprobs_mismatch_count"].aggregate() == 2
+
+
+class _DataDependentShapes(TorchDispatchMode):
+    """Records the ops whose output size depends on tensor values (boolean-mask indexing, nonzero)."""
+
+    def __init__(self):
+        super().__init__()
+        self.ops = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        name = str(func)
+        indices = args[1] if name.startswith("aten.index.") and len(args) > 1 else ()
+        if name.startswith(("aten.nonzero", "aten.masked_select")) or any(
+            isinstance(index, torch.Tensor) and index.dtype == torch.bool for index in indices
+        ):
+            self.ops.append(name)
+        return func(*args, **(kwargs or {}))
+
+
+def test_mismatch_count_has_no_data_dependent_shapes():
+    """Accelerators that compile per shape would otherwise compile it again for every new valid-token count."""
+    old = torch.tensor([-1.0, -2.0, -3.0, -4.0])
+    config, model_output, data = _loss_inputs(old, old + 0.5, response_mask=torch.tensor([1, 0, 1, 0]))
+    with _DataDependentShapes() as mode:
+        _, metrics = ppo_loss(config, model_output, data)
+    assert metrics["actor/old_logprobs_mismatch_count"].aggregate() == 2
+    assert mode.ops == []
